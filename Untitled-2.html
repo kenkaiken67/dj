@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Holographic DJ Launchpad</title>
+    <style>
+        /* Mengatur tampilan dasar, latar gelap, dan mencegah scroll */
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #0f0f0f;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            user-select: none;
+        }
+
+        /* Container untuk Grid Launchpad */
+        #grid-container {
+            display: grid;
+            width: 100vw;
+            height: 100vh;
+            gap: 2px;
+            background-color: #1a1a1a;
+        }
+
+        /* Gaya untuk setiap tombol Launchpad */
+        .pad {
+            background-color: #080808;
+            border: 1px solid #1f1f1f;
+            border-radius: 4px;
+            cursor: pointer;
+            /* Efek pudar (fade-out) yang mulus saat pad tidak lagi aktif */
+            transition: background-color 0.8s ease-out, box-shadow 1s ease-out;
+        }
+
+        /* State saat pad ditekan (instan tanpa delay) */
+        .pad.active {
+            transition: none;
+        }
+
+        /* Wrapper untuk menengahkan dan menganimasikan piringan hitam */
+        #hologram-wrapper {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) scale(1);
+            pointer-events: none; /* SANGAT PENTING: Klik tembus ke grid */
+            z-index: 10;
+            transition: transform 0.1s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        /* Animasi berdenyut (pulsate) saat tombol diklik */
+        #hologram-wrapper.pulse-active {
+            transform: translate(-50%, -50%) scale(1.15);
+        }
+
+        /* Gaya Piringan Hitam Hologram */
+        #hologram {
+            width: 350px;
+            height: 350px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, rgba(0, 255, 255, 0.1) 0%, rgba(255, 0, 255, 0.1) 100%);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 2px solid rgba(0, 255, 255, 0.4);
+            box-shadow: 0 0 50px rgba(0, 255, 255, 0.3), inset 0 0 40px rgba(255, 0, 255, 0.3);
+            background-image: repeating-radial-gradient(
+                circle at center, 
+                transparent, 
+                transparent 8px, 
+                rgba(255, 255, 255, 0.08) 9px, 
+                rgba(255, 255, 255, 0.08) 10px
+            );
+            /* Animasi berputar */
+            animation: spin 4s linear infinite;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* Titik tengah piringan hitam */
+        #hologram-center {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background: rgba(0, 0, 0, 0.7);
+            border: 2px solid #0ff;
+            box-shadow: 0 0 25px #0ff, inset 0 0 15px #0ff;
+        }
+
+        @keyframes spin {
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Layar Awal */
+        #start-overlay {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(10, 10, 10, 0.95);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+            color: #fff;
+            backdrop-filter: blur(8px);
+        }
+
+        #start-btn {
+            padding: 15px 40px;
+            font-size: 1.5rem;
+            color: #0ff;
+            background: transparent;
+            border: 2px solid #0ff;
+            border-radius: 8px;
+            cursor: pointer;
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.5);
+            text-transform: uppercase;
+            letter-spacing: 3px;
+            transition: all 0.3s;
+            font-weight: bold;
+        }
+
+        #start-btn:hover {
+            background: #0ff;
+            color: #000;
+            box-shadow: 0 0 40px #0ff;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Layar Awal -->
+    <div id="start-overlay">
+        <h1 style="margin-bottom: 10px; font-weight: 300; letter-spacing: 4px; text-shadow: 0 0 10px #0ff;">HOLO-LAUNCHPAD</h1>
+        <p style="margin-bottom: 40px; color: #aaa; letter-spacing: 1px;">Sistem Audio Lanjutan (Drums & Synth Echo)</p>
+        <button id="start-btn">Inisialisasi Sistem</button>
+    </div>
+
+    <!-- Piringan Hitam Hologram (Wrapper untuk efek denyut) -->
+    <div id="hologram-wrapper">
+        <div id="hologram">
+            <div id="hologram-center"></div>
+        </div>
+    </div>
+
+    <!-- Grid untuk tombol-tombol -->
+    <div id="grid-container"></div>
+
+    <script>
+        let audioCtx;
+        let masterGain, delayNode, feedbackGain;
+        let noiseBuffer; // Buffer untuk suara drum (snare, hi-hat)
+        let totalRows = 0, totalCols = 0;
+        
+        const gridContainer = document.getElementById('grid-container');
+        const startOverlay = document.getElementById('start-overlay');
+        const startBtn = document.getElementById('start-btn');
+        const hologramWrapper = document.getElementById('hologram-wrapper');
+
+        const neonColors = ['#00ffff', '#ff00ff', '#00ff00', '#ffff00', '#ff00aa', '#00aaff'];
+        const waveforms = ['square', 'sawtooth', 'triangle', 'sine'];
+        const baseFreq = 130.81; // C3
+        const pentatonicScale = [1, 1.122, 1.259, 1.498, 1.681]; 
+
+        // Fungsi untuk membuat "White Noise" (digunakan untuk hi-hat dan snare drum)
+        function createNoiseBuffer() {
+            const bufferSize = audioCtx.sampleRate * 2; // 2 detik suara statis
+            const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+            const output = buffer.getChannelData(0);
+            for (let i = 0; i < bufferSize; i++) {
+                output[i] = Math.random() * 2 - 1;
+            }
+            return buffer;
+        }
+
+        // Setup Audio Node Lanjutan
+        function setupAudio() {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            masterGain = audioCtx.createGain();
+            masterGain.gain.value = 0.8;
+            masterGain.connect(audioCtx.destination);
+
+            // Efek Delay (Echo) untuk efek ruang yang lebih besar
+            delayNode = audioCtx.createDelay();
+            delayNode.delayTime.value = 0.25; // 250ms echo
+            
+            feedbackGain = audioCtx.createGain();
+            feedbackGain.gain.value = 0.3; // Berapa lama echo bertahan
+            
+            delayNode.connect(feedbackGain);
+            feedbackGain.connect(delayNode);
+            delayNode.connect(masterGain);
+
+            // Siapkan buffer noise untuk drum
+            noiseBuffer = createNoiseBuffer();
+        }
+
+        startBtn.addEventListener('click', () => {
+            setupAudio();
+            startOverlay.style.display = 'none';
+            buildGrid();
+        });
+
+        function buildGrid() {
+            gridContainer.innerHTML = '';
+            const padSize = 70; // Ukuran sedikit lebih besar
+            totalCols = Math.floor(window.innerWidth / padSize);
+            totalRows = Math.floor(window.innerHeight / padSize);
+            
+            gridContainer.style.gridTemplateColumns = `repeat(${totalCols}, 1fr)`;
+            gridContainer.style.gridTemplateRows = `repeat(${totalRows}, 1fr)`;
+            
+            for (let r = 0; r < totalRows; r++) {
+                for (let c = 0; c < totalCols; c++) {
+                    const pad = document.createElement('div');
+                    pad.classList.add('pad');
+                    
+                    // Deteksi Baris dari bawah untuk styling opsional
+                    const distanceFromBottom = totalRows - r - 1;
+                    if (distanceFromBottom < 3) {
+                        // Area Drum: Berikan sedikit perbedaan warna default
+                        pad.style.backgroundColor = '#111';
+                    }
+                    
+                    pad.addEventListener('mousedown', () => triggerPad(pad, r, c));
+                    pad.addEventListener('touchstart', (e) => { 
+                        e.preventDefault(); 
+                        triggerPad(pad, r, c); 
+                    });
+                    
+                    gridContainer.appendChild(pad);
+                }
+            }
+        }
+
+        // FUNGSI SUARA DRUM
+        function playKick() {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(masterGain);
+
+            osc.frequency.setValueAtTime(150, audioCtx.currentTime); // Frekuensi awal
+            osc.frequency.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5); // Meluncur ke bawah (Punch)
+            
+            gain.gain.setValueAtTime(1, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+
+            osc.start(audioCtx.currentTime);
+            osc.stop(audioCtx.currentTime + 0.5);
+        }
+
+        function playSnare() {
+            // Snare terdiri dari oscillator (body) + noise (rattle)
+            const osc = audioCtx.createOscillator();
+            const oscGain = audioCtx.createGain();
+            osc.type = 'triangle';
+            osc.connect(oscGain);
+            oscGain.connect(masterGain);
+            osc.frequency.setValueAtTime(250, audioCtx.currentTime);
+            oscGain.gain.setValueAtTime(0.5, audioCtx.currentTime);
+            oscGain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+            osc.start(audioCtx.currentTime);
+            osc.stop(audioCtx.currentTime + 0.2);
+
+            const noiseSource = audioCtx.createBufferSource();
+            noiseSource.buffer = noiseBuffer;
+            const noiseFilter = audioCtx.createBiquadFilter();
+            noiseFilter.type = 'highpass';
+            noiseFilter.frequency.value = 1000;
+            const noiseGain = audioCtx.createGain();
+            
+            noiseSource.connect(noiseFilter);
+            noiseFilter.connect(noiseGain);
+            noiseGain.connect(masterGain);
+            
+            noiseGain.gain.setValueAtTime(0.8, audioCtx.currentTime);
+            noiseGain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.25);
+            
+            noiseSource.start(audioCtx.currentTime);
+        }
+
+        function playHiHat() {
+            const noiseSource = audioCtx.createBufferSource();
+            noiseSource.buffer = noiseBuffer;
+            const noiseFilter = audioCtx.createBiquadFilter();
+            noiseFilter.type = 'highpass';
+            noiseFilter.frequency.value = 8000; // Frekuensi sangat tinggi
+            const noiseGain = audioCtx.createGain();
+            
+            noiseSource.connect(noiseFilter);
+            noiseFilter.connect(noiseGain);
+            noiseGain.connect(masterGain);
+            
+            noiseGain.gain.setValueAtTime(0.5, audioCtx.currentTime);
+            noiseGain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1); // Decay sangat cepat
+            
+            noiseSource.start(audioCtx.currentTime);
+        }
+
+        // FUNGSI SUARA SYNTH LENGKAP DENGAN ADSR ENVELOPE
+        function playSynth(row, col) {
+            const osc = audioCtx.createOscillator();
+            const synthGain = audioCtx.createGain();
+            
+            // Atur bentuk gelombang
+            osc.type = waveforms[row % waveforms.length];
+
+            // Hitung Nada
+            const noteIndex = col % pentatonicScale.length;
+            const octave = Math.floor(col / pentatonicScale.length) + 1;
+            const freq = baseFreq * pentatonicScale[noteIndex] * (octave * 0.5);
+            osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+
+            // ADSR Envelope (Attack, Decay, Sustain, Release)
+            const attackTime = 0.05;
+            const releaseTime = 0.8;
+            
+            synthGain.gain.setValueAtTime(0, audioCtx.currentTime);
+            synthGain.gain.linearRampToValueAtTime(0.2, audioCtx.currentTime + attackTime); // Attack
+            synthGain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + attackTime + releaseTime); // Release
+            
+            // Hubungkan synth ke master (langsung) dan ke delay (untuk echo)
+            osc.connect(synthGain);
+            synthGain.connect(masterGain);
+            synthGain.connect(delayNode);
+
+            osc.start();
+            osc.stop(audioCtx.currentTime + attackTime + releaseTime);
+        }
+
+        function triggerPad(pad, row, col) {
+            if (!audioCtx) return;
+
+            // 1. EFEK VISUAL: Tombol (Neon Glow Trail)
+            const color = neonColors[Math.floor(Math.random() * neonColors.length)];
+            pad.classList.add('active'); // Menghapus efek fade-out sebentar agar nyala instan
+            pad.style.backgroundColor = color;
+            pad.style.boxShadow = `0 0 30px ${color}, inset 0 0 10px ${color}`;
+            
+            // Mulai fade-out
+            requestAnimationFrame(() => {
+                setTimeout(() => {
+                    pad.classList.remove('active'); // Kembalikan transisi fade-out lambat dari CSS
+                    
+                    // Kembalikan warna default tergantung barisnya (Area Drum atau Area Synth)
+                    const isDrumArea = (totalRows - row - 1) < 3;
+                    pad.style.backgroundColor = isDrumArea ? '#111' : '';
+                    pad.style.boxShadow = '';
+                }, 50);
+            });
+
+            // 2. EFEK VISUAL: Piringan Hologram Berdenyut (Speaker Beat)
+            hologramWrapper.classList.add('pulse-active');
+            setTimeout(() => {
+                hologramWrapper.classList.remove('pulse-active');
+            }, 100);
+
+            // 3. MESIN AUDIO ROUTING
+            // Baris bawah (0 = Kick, 1 = Snare, 2 = Hi-hat) dari dasar layar
+            const distanceFromBottom = totalRows - row - 1;
+            
+            if (distanceFromBottom === 0) {
+                playKick();
+            } else if (distanceFromBottom === 1) {
+                playSnare();
+            } else if (distanceFromBottom === 2) {
+                playHiHat();
+            } else {
+                // Sisa baris di atas adalah area Synth
+                playSynth(row, col);
+            }
+        }
+
+        window.addEventListener('resize', () => {
+            if (audioCtx) buildGrid();
+        });
+    </script>
+</body>
+</html>
